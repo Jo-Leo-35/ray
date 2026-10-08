@@ -412,7 +412,9 @@ class MultiAgentEpisode:
         )
         # Case 2: Some agents are truncated and the others are terminated -> Declare
         # this episode as terminated.
-        if all(aid in set(agents_done) for aid in self.agent_ids):
+        # Include agents whose first observation arrives in this step, since their
+        # single-agent episodes are only registered below.
+        if all(aid in agents_done for aid in self.agent_ids | set(observations)):
             self.is_terminated = True
 
         # For all agents that are not stepping in this env step, but that are not done

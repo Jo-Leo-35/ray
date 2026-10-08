@@ -523,6 +523,92 @@ class TestMultiAgentEpisode(unittest.TestCase):
         check(episode._hanging_rewards_end["agent_3"], 2.2)
         check(episode._hanging_rewards_begin["agent_5"], 1.0)
 
+    def test_add_env_step_new_agent_when_registered_agents_done(self):
+        for done_types in [
+            ("terminated",),
+            ("truncated",),
+            ("terminated", "truncated"),
+        ]:
+            with self.subTest(done_types=done_types):
+                agents = {f"a{i}": done for i, done in enumerate(done_types)}
+                episode = MultiAgentEpisode()
+                episode.add_env_reset(observations={aid: 0 for aid in agents})
+
+                # A new agent joins on the same step that all known agents finish.
+                episode.add_env_step(
+                    observations={**{aid: 1 for aid in agents}, "new": 10},
+                    actions={aid: 0 for aid in agents},
+                    rewards={aid: 1.0 for aid in agents},
+                    terminateds={
+                        **{aid: done == "terminated" for aid, done in agents.items()},
+                        "__all__": False,
+                    },
+                    truncateds={
+                        **{aid: done == "truncated" for aid, done in agents.items()},
+                        "__all__": False,
+                    },
+                )
+
+                self.assertFalse(episode.is_done)
+                self.assertEqual(episode.agent_ids, set(agents) | {"new"})
+                self.assertEqual(episode.agent_episodes["new"].observations[-1], 10)
+                self.assertFalse(episode.agent_episodes["new"].is_done)
+                for aid, done in agents.items():
+                    self.assertEqual(
+                        episode.agent_episodes[aid].is_terminated, done == "terminated"
+                    )
+                    self.assertEqual(
+                        episode.agent_episodes[aid].is_truncated, done == "truncated"
+                    )
+
+                # The newcomer must be able to act in the same ongoing episode.
+                episode.add_env_step(
+                    observations={"new": 11}, actions={"new": 0}, rewards={"new": 2.0}
+                )
+                self.assertFalse(episode.is_done)
+                self.assertEqual(len(episode.agent_episodes["new"]), 1)
+                self.assertEqual(episode.agent_episodes["new"].observations[-1], 11)
+
+                # Once the newcomer also finishes, previously done agents still count.
+                episode.add_env_step(
+                    observations={"new": 12},
+                    actions={"new": 0},
+                    rewards={"new": 3.0},
+                    terminateds={"new": True, "__all__": False},
+                )
+                self.assertTrue(episode.is_terminated)
+
+    def test_add_env_step_all_agents_done_with_new_observation(self):
+        for global_done, newcomer_done in [
+            (None, "terminated"),
+            (None, "truncated"),
+            ("terminated", None),
+            ("truncated", None),
+        ]:
+            with self.subTest(global_done=global_done, newcomer_done=newcomer_done):
+                episode = MultiAgentEpisode()
+                episode.add_env_reset(observations={"a0": 0, "a1": 0})
+                episode.add_env_step(
+                    observations={"a0": 1, "a1": 1, "new": 10},
+                    actions={"a0": 0, "a1": 0},
+                    rewards={"a0": 1.0, "a1": 1.0},
+                    terminateds={
+                        "a0": True,
+                        "new": newcomer_done == "terminated",
+                        "__all__": global_done == "terminated",
+                    },
+                    truncateds={
+                        "a1": True,
+                        "new": newcomer_done == "truncated",
+                        "__all__": global_done == "truncated",
+                    },
+                )
+                self.assertTrue(episode.is_done)
+                self.assertEqual(episode.agent_ids, {"a0", "a1"})
+                self.assertEqual(episode.is_truncated, global_done == "truncated")
+                if global_done is None:
+                    self.assertTrue(episode.is_terminated)
+
     def test_get_observations(self):
         # Generate simple records for a multi agent environment.
         (
